@@ -375,6 +375,16 @@ class DataCleaner:
             "Hình ảnh của bài đăng": self.df["image_url"],
             "Yếu tố khác": ""
         })
+
+        subset = ["Tỉnh/Thành phố", "Quận/Huyện/Thị xã", "Xã/Phường/Thị trấn",
+                  "Đường phố", "Địa chỉ chi tiết", "Nguồn thông tin",
+                  "Giá rao bán/giao dịch", "Giá ước tính", "Số tầng công trình",
+                  "Đơn giá xây dựng", "Diện tích đất (m2)", "Tổng diện tích sàn",
+                  "Kích thước mặt tiền (m)", "Kích thước chiều dài", "Số mặt tiền tiếp giáp",
+                  "Độ rộng ngõ/ngách nhỏ nhất (m)", "Khoảng cách tới trục đường chính (m)", 
+        ]
+
+        self.cleaned_df.dropna(subset=subset, inplace=True)
         print("[INFO] Data cleaning process completed.")
 
     def save_cleaned_data(self):
