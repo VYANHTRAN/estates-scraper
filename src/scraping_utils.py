@@ -137,7 +137,8 @@ class Scraper:
             # Create table. property_id is the PRIMARY KEY to ensure uniqueness.
             create_table_sql = """
             CREATE TABLE IF NOT EXISTS listings (
-                property_id TEXT PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                property_id TEXT,
                 listing_title TEXT,
                 total_price TEXT,
                 unit_price TEXT,
@@ -148,10 +149,15 @@ class Scraper:
                 alley_width TEXT,
                 features TEXT,
                 property_description TEXT,
+                has_updated INTEGER DEFAULT 0, 
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """
             cursor.execute(create_table_sql)
+
+             # Create an index on property_id for faster lookups
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_property_id ON listings (property_id);")
+
             self.conn.commit()
             self.log(f"Database initialized at {DB_PATH}", "INFO")
         except Exception as e:
@@ -166,7 +172,10 @@ class Scraper:
                 self.log("Database connection closed.", "INFO")
 
     def save_details_to_db(self, listing):
-        """Upserts listing details into SQLite."""
+        """
+        Inserts listing details into SQLite as a new version.
+        Updates old versions to flag them as updated.
+        """
         if not listing or not self.conn:
             return
 
@@ -180,41 +189,60 @@ class Scraper:
         # Filter to ensure we only insert known fields
         data_to_insert = {k: v for k, v in listing_copy.items() if k in self.fieldnames}
         
+        property_id = data_to_insert.get("property_id")
         # Ensure property_id exists
-        if not data_to_insert.get("property_id"):
+        if not property_id:
             self.log(f"Skipping listing without property_id: {data_to_insert.get('property_url')}", "WARN")
             return
-
-        query = """
-        INSERT OR REPLACE INTO listings (
-            listing_title, property_id, total_price, unit_price, 
-            property_url, image_url, city, district, alley_width, 
-            features, property_description, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """
-        
-        values = (
-            data_to_insert.get("listing_title"),
-            data_to_insert.get("property_id"),
-            data_to_insert.get("total_price"),
-            data_to_insert.get("unit_price"),
-            data_to_insert.get("property_url"),
-            data_to_insert.get("image_url"),
-            data_to_insert.get("city"),
-            data_to_insert.get("district"),
-            data_to_insert.get("alley_width"),
-            data_to_insert.get("features"),
-            data_to_insert.get("property_description")
-        )
 
         with self.db_lock:
             try:
                 cursor = self.conn.cursor()
+                
+                # Check if this property_id already exists in the DB
+                cursor.execute("SELECT COUNT(*) FROM listings WHERE property_id = ?", (property_id,))
+                count = cursor.fetchone()[0]
+                
+                has_updated_flag = 0
+                
+                if count > 0:
+                    # Logic: If data exists, we flag ALL versions (old and this new one) as 'has_updated = 1'
+                    # 1. Update existing records
+                    cursor.execute("UPDATE listings SET has_updated = 1 WHERE property_id = ?", (property_id,))
+                    # 2. Set flag for new record
+                    has_updated_flag = 1
+                    self.log(f"Updating history for property {property_id}. New version added.", "DEBUG")
+                
+                # Insert new record (Always INSERT, never replace, to keep history)
+                query = """
+                INSERT INTO listings (
+                    listing_title, property_id, total_price, unit_price, 
+                    property_url, image_url, city, district, alley_width, 
+                    features, property_description, has_updated, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """
+                
+                values = (
+                    data_to_insert.get("listing_title"),
+                    data_to_insert.get("property_id"),
+                    data_to_insert.get("total_price"),
+                    data_to_insert.get("unit_price"),
+                    data_to_insert.get("property_url"),
+                    data_to_insert.get("image_url"),
+                    data_to_insert.get("city"),
+                    data_to_insert.get("district"),
+                    data_to_insert.get("alley_width"),
+                    data_to_insert.get("features"),
+                    data_to_insert.get("property_description"),
+                    has_updated_flag 
+                )
+                
                 cursor.execute(query, values)
                 self.conn.commit()
-                self.log(f"Saved/Updated property {data_to_insert['property_id']} in DB.", "DEBUG")
+                
             except Exception as e:
-                self.log(f"Error writing to DB: {e} with data: {data_to_insert['property_id']}", "ERROR")
+                self.log(f"Error writing to DB: {e} with data: {property_id}", "ERROR")
+
 
     # -------------------- Menu Scraping --------------------
     def get_listing_urls(self, html):
@@ -288,6 +316,7 @@ class Scraper:
         with open(URLS_OUTPUT_PATH, "w", encoding="utf-8") as f:
             json.dump(list(urls_to_save), f, ensure_ascii=False, indent=2)
         self.log(f"Saved {len(urls_to_save)} URLs to {URLS_OUTPUT_PATH}", "INFO")
+
 
     # -------------------- Details Scraping --------------------
     def extract_listing_details(self, url):
@@ -481,5 +510,5 @@ class Scraper:
         self.log("Shutting down scraper components...", "INFO")
         self.stop_requested.set()
         self.driver_pool.close_all()
-        self._close_details_csv()
+        self._close_db()
         self.log("Scraper shutdown complete.", "INFO")

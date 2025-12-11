@@ -23,7 +23,8 @@ class DataCleaner:
     def load_data(self):
         """
         Loads data from SQLite database.
-        Duplicate handling is removed because the DB PRIMARY KEY prevents them.
+        It retrieves ONLY the latest version of each property.
+        It groups by 'property_id' and selects the row with the max 'id' (latest insertion).
         """
         if not os.path.exists(self.db_path):
             raise FileNotFoundError(f"Database not found: {self.db_path}")
@@ -32,8 +33,16 @@ class DataCleaner:
         try:
             conn = sqlite3.connect(self.db_path)
             
-            # Read everything from the table
-            query = "SELECT * FROM listings"
+            # Query to get only the most recent entry for each property_id
+            query = """
+            SELECT *
+            FROM listings
+            WHERE id IN (
+                SELECT MAX(id)
+                FROM listings
+                GROUP BY property_id
+            )
+            """
             self.df = pd.read_sql_query(query, conn)
             
             conn.close()
@@ -41,8 +50,9 @@ class DataCleaner:
             print(f"[ERROR] Failed to load data from DB: {e}")
             raise
 
-        print(f"[INFO] Loaded {len(self.df)} records for cleaning.")
+        print(f"[INFO] Loaded {len(self.df)} records (latest versions only) for cleaning.")
 
+        
     # -- Helper Methods --
     @staticmethod
     def _extract_city(row):

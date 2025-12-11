@@ -1,7 +1,4 @@
 import argparse
-import json
-import asyncio
-import os
 import sys
 
 from src.scraping_utils import Scraper
