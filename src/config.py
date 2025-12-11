@@ -5,7 +5,7 @@ START_URL = f"{BASE_URL}/nha-dat-ban?"
 OUTPUT_DIR = "data"
 
 URLS_OUTPUT_PATH = os.path.join(OUTPUT_DIR, "listing_urls.json")
-DETAILS_OUTPUT_PATH = os.path.join(OUTPUT_DIR, "listing_details.csv")
+DB_PATH = os.path.join(OUTPUT_DIR, "listings.db") 
 CLEANED_DETAILS_OUTPUT_PATH = os.path.join(OUTPUT_DIR, "listing_details_cleaned.xlsx")
 
 MAX_RETRIES = 3

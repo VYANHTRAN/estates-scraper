@@ -32,7 +32,7 @@ def run_scrape_details():
     scraper = Scraper()
     print("[INFO] Scraping listing details from saved URLs...")
     try:
-        scraper.process_listings_from_json(URLS_OUTPUT_PATH, DETAILS_OUTPUT_PATH)
+        scraper.process_listings_from_json(URLS_OUTPUT_PATH)
     except KeyboardInterrupt:
         print("\n[INFO] KeyboardInterrupt detected during details scraping. Any unsaved details have been flushed to CSV.")
         scraper.stop_requested.set() 

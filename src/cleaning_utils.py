@@ -2,6 +2,7 @@ import os
 import re
 import pandas as pd
 import numpy as np
+import sqlite3 
 
 from src.config import *
 
@@ -14,40 +15,35 @@ class DataCleaner:
     """
 
     def __init__(self):
-        """Initializes the DataCleaner with paths from the config file."""
-        self.raw_details_path = DETAILS_OUTPUT_PATH
+        self.db_path = DB_PATH 
         self.output_path = CLEANED_DETAILS_OUTPUT_PATH
         self.df = None
         self.cleaned_df = None
 
     def load_data(self):
         """
-        Loads the raw data and image map (if available), then merges them.
-        Includes deduplication by 'property_id'.
+        Loads data from SQLite database.
+        Duplicate handling is removed because the DB PRIMARY KEY prevents them.
         """
-        if not os.path.exists(self.raw_details_path):
-            raise FileNotFoundError(f"Raw details file not found: {self.raw_details_path}")
+        if not os.path.exists(self.db_path):
+            raise FileNotFoundError(f"Database not found: {self.db_path}")
 
-        df = pd.read_csv(self.raw_details_path)
-        df.columns = [
-            "listing_title", "property_id", "total_price", "unit_price",
-            "property_url", "image_url", "city", "district", "alley_width",
-            "features", "property_description"
-        ]
+        print(f"[INFO] Connecting to database: {self.db_path}")
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            # Read everything from the table
+            query = "SELECT * FROM listings"
+            self.df = pd.read_sql_query(query, conn)
+            
+            conn.close()
+        except Exception as e:
+            print(f"[ERROR] Failed to load data from DB: {e}")
+            raise
 
-        if not df.empty:
-            df = df.iloc[:-1]  # intentional removal of last row 
+        print(f"[INFO] Loaded {len(self.df)} records for cleaning.")
 
-        # Deduplicate by 'property_id', keeping the first occurrence
-        initial_rows = len(df)
-        self.df = df.drop_duplicates(subset=['property_id'], keep='first')
-
-        if len(self.df) < initial_rows:
-            print(f"[INFO] Deduplicated {initial_rows - len(self.df)} records by 'property_id'.")
-
-        print(f"[INFO] Loaded and prepared {len(self.df)} records for cleaning.")
-
-    # -- Helper Methods (no changes needed here as they operate on self.df columns) --
+    # -- Helper Methods --
     @staticmethod
     def _extract_city(row):
         if pd.notna(row.get("city")):

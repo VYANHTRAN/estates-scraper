@@ -1,10 +1,10 @@
 import os
 import json
-import csv
 import time
 import random
 import sys
 import threading 
+import sqlite3
 
 import requests
 from bs4 import BeautifulSoup
@@ -114,9 +114,10 @@ class Scraper:
         ]
         os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-        self.details_csv_file = None
-        self.details_csv_writer = None
-        self.details_csv_lock = threading.Lock() 
+        # Database Initialization 
+        self.db_lock = threading.Lock()
+        self.conn = None
+        self._init_db()
 
     def log(self, message, level="INFO"):
         levels = ["DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"]
@@ -124,6 +125,96 @@ class Scraper:
         message_level_idx = levels.index(level.upper()) if level.upper() in levels else 1
         if message_level_idx >= config_level_idx:
             print(f"[{level}] {message}", file=sys.stderr if level in ["ERROR", "CRITICAL"] else sys.stdout)
+
+    # -------------------- Database Methods --------------------
+    def _init_db(self):
+        """Initializes SQLite database and creates the table if not exists."""
+        try:
+            # check_same_thread=False is needed if connection is shared (though we use a lock)
+            self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+            cursor = self.conn.cursor()
+            
+            # Create table. property_id is the PRIMARY KEY to ensure uniqueness.
+            create_table_sql = """
+            CREATE TABLE IF NOT EXISTS listings (
+                property_id TEXT PRIMARY KEY,
+                listing_title TEXT,
+                total_price TEXT,
+                unit_price TEXT,
+                property_url TEXT,
+                image_url TEXT,
+                city TEXT,
+                district TEXT,
+                alley_width TEXT,
+                features TEXT,
+                property_description TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+            cursor.execute(create_table_sql)
+            self.conn.commit()
+            self.log(f"Database initialized at {DB_PATH}", "INFO")
+        except Exception as e:
+            self.log(f"Failed to initialize database: {e}", "CRITICAL")
+            sys.exit(1)
+
+    def _close_db(self):
+        with self.db_lock:
+            if self.conn:
+                self.conn.close()
+                self.conn = None
+                self.log("Database connection closed.", "INFO")
+
+    def save_details_to_db(self, listing):
+        """Upserts listing details into SQLite."""
+        if not listing or not self.conn:
+            return
+
+        # Prepare data: Join lists into strings 
+        listing_copy = listing.copy()
+        if isinstance(listing_copy.get("features"), list):
+            listing_copy["features"] = "; ".join(listing_copy.get("features", []))
+        if isinstance(listing_copy.get("property_description"), list):
+            listing_copy["property_description"] = ". ".join(listing_copy.get("property_description", []))
+
+        # Filter to ensure we only insert known fields
+        data_to_insert = {k: v for k, v in listing_copy.items() if k in self.fieldnames}
+        
+        # Ensure property_id exists
+        if not data_to_insert.get("property_id"):
+            self.log(f"Skipping listing without property_id: {data_to_insert.get('property_url')}", "WARN")
+            return
+
+        query = """
+        INSERT OR REPLACE INTO listings (
+            listing_title, property_id, total_price, unit_price, 
+            property_url, image_url, city, district, alley_width, 
+            features, property_description, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """
+        
+        values = (
+            data_to_insert.get("listing_title"),
+            data_to_insert.get("property_id"),
+            data_to_insert.get("total_price"),
+            data_to_insert.get("unit_price"),
+            data_to_insert.get("property_url"),
+            data_to_insert.get("image_url"),
+            data_to_insert.get("city"),
+            data_to_insert.get("district"),
+            data_to_insert.get("alley_width"),
+            data_to_insert.get("features"),
+            data_to_insert.get("property_description")
+        )
+
+        with self.db_lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute(query, values)
+                self.conn.commit()
+                self.log(f"Saved/Updated property {data_to_insert['property_id']} in DB.", "DEBUG")
+            except Exception as e:
+                self.log(f"Error writing to DB: {e} with data: {data_to_insert['property_id']}", "ERROR")
 
     # -------------------- Menu Scraping --------------------
     def get_listing_urls(self, html):
@@ -199,24 +290,6 @@ class Scraper:
         self.log(f"Saved {len(urls_to_save)} URLs to {URLS_OUTPUT_PATH}", "INFO")
 
     # -------------------- Details Scraping --------------------
-    def _initialize_details_csv(self, output_csv, append=False):
-        with self.details_csv_lock:
-            file_exists = os.path.isfile(output_csv) and append
-            self.details_csv_file = open(output_csv, "a" if append else "w", newline="", encoding="utf-8")
-            self.details_csv_writer = csv.DictWriter(self.details_csv_file, fieldnames=self.fieldnames)
-            if not file_exists:
-                self.details_csv_writer.writeheader()
-            self.log(f"Initialized CSV writer for {output_csv}", "INFO")
-
-
-    def _close_details_csv(self):
-        with self.details_csv_lock:
-            if self.details_csv_file:
-                self.details_csv_file.close()
-                self.details_csv_file = None
-                self.details_csv_writer = None
-                self.log("Details CSV file closed.", "INFO")
-
     def extract_listing_details(self, url):
         if self.stop_requested.is_set():
             self.log(f"Skipping {url} as shutdown is requested.", "DEBUG")
@@ -337,22 +410,6 @@ class Scraper:
             if driver:
                 self.driver_pool.release(driver)
 
-
-    def save_details_to_csv(self, listing):
-        if self.details_csv_writer and listing:
-            listing_copy = listing.copy()
-            listing_copy["features"] = "; ".join(listing_copy.get("features", []))
-            listing_copy["property_description"] = ". ".join(listing_copy.get("property_description", []))
-            
-            filtered_listing = {k: v for k, v in listing_copy.items() if k in self.fieldnames}
-
-            with self.details_csv_lock:
-                try:
-                    self.details_csv_writer.writerow(filtered_listing)
-                    self.details_csv_file.flush()
-                except Exception as e:
-                    self.log(f"Error writing to CSV: {e} with data: {filtered_listing}", "ERROR")
-
     def scrape_with_retries(self, url):
         if self.stop_requested.is_set():
             self.log(f"Stopping retries for {url} as shutdown is requested.", "DEBUG")
@@ -376,7 +433,11 @@ class Scraper:
         self.log(f"All {MAX_RETRIES} attempts failed for {url}.", "ERROR")
         return None
 
-    def process_listings_from_json(self, json_path, output_csv=DETAILS_OUTPUT_PATH):
+    def process_listings_from_json(self, json_path, output_path_dummy=None):
+        """
+        Loads URLs, scrapes them, and upserts into SQLite.
+        """
+        # 1. Load listing URLs
         if not os.path.exists(json_path):
             self.log(f"JSON file not found: {json_path}", "ERROR")
             return
@@ -387,46 +448,30 @@ class Scraper:
             except json.JSONDecodeError as e:
                 self.log(f"Invalid JSON format: {e}", "ERROR")
                 return
-        
+
         if not urls:
-            self.log("No URLs found in JSON file to process.", "INFO")
+            self.log("No URLs found in JSON.", "INFO")
             return
 
-        # Load processed property_urls from CSV
-        processed_urls = set()
-        if os.path.exists(output_csv):
-            with open(output_csv, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    if "property_url" in row and row["property_url"]:
-                        processed_urls.add(row["property_url"])
-
-        self.log(f"Found {len(processed_urls)} already processed listings in {output_csv}", "INFO")
-
-        self._initialize_details_csv(output_csv, append=True)
-
-        urls_to_process = list(set(urls) - processed_urls)
-
-        if not urls_to_process:
-            self.log("All listings already scraped. Nothing to do.", "INFO")
-            return
-
-        self.log(f"Starting to scrape {len(urls_to_process)} listings...", "INFO")
+        self.log(f"Starting to scrape {len(urls)} listings into SQLite...", "INFO")
         
         try:
-            for url in tqdm(urls_to_process, desc="Scraping listing details"):
+            for url in tqdm(urls, desc="Scraping listing details"):
                 if self.stop_requested.is_set():
-                    self.log("Shutdown requested. Stopping further detail scraping.", "INFO")
+                    self.log("Shutdown requested.", "INFO")
                     break
 
                 result = self.scrape_with_retries(url)
+
                 if result:
-                    self.save_details_to_csv(result)
+                    # Save to DB (Handles Update if property_id exists, Insert otherwise)
+                    self.save_details_to_db(result)
+                
         except KeyboardInterrupt:
-            self.log("KeyboardInterrupt detected. Initiating graceful shutdown...", "INFO")
+            self.log("KeyboardInterrupt detected.", "INFO")
             self.stop_requested.set()
         except Exception as e:
-            self.log(f"An unexpected error occurred during sequential scraping: {e}", "CRITICAL")
+            self.log(f"Unexpected error: {e}", "CRITICAL")
             self.stop_requested.set()
         finally:
             self.shutdown()
