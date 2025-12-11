@@ -91,11 +91,6 @@ def main():
         ],
         help="The task to run.",
     )
-    parser.add_argument(
-        "--failed_csv",
-        type=str,
-        help="Path to CSV of failed screenshots (required for retry_screenshots).",
-    )
 
     args = parser.parse_args()
 
