@@ -346,6 +346,7 @@ class DataCleaner:
             length = round((area / front_width).replace([np.inf, -np.inf], np.nan), 2)
 
         self.cleaned_df = pd.DataFrame({
+            "Tiêu đề bài đăng": self.df["listing_title"],
             "Tỉnh/Thành phố": city,
             "Quận/Huyện/Thị xã": district,
             "Xã/Phường/Thị trấn": location,
@@ -373,7 +374,8 @@ class DataCleaner:
             "Khoảng cách tới trục đường chính (m)": self.df.apply(self._extract_distance_to_main_road, axis=1),
             "Mục đích sử dụng đất": "Đất ở",
             "Hình ảnh của bài đăng": self.df["image_url"],
-            "Yếu tố khác": ""
+            "Yếu tố khác": "", 
+            "Thông tin chi tiết": self.df["property_description"]
         })
 
         subset = ["Tỉnh/Thành phố", "Quận/Huyện/Thị xã", "Xã/Phường/Thị trấn",
