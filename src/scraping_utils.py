@@ -402,16 +402,33 @@ class Scraper:
 
             # Description
             try:
-                desc_div = driver.find_element(By.CSS_SELECTOR, 'div[data-testid="property-description"]')
-                if desc_div and desc_div.text:
-                    data["property_description"] = [desc_div.text.strip()]
-                else:
-                    desc_elements = wait.until(EC.presence_of_all_elements_located(
-                        (By.CSS_SELECTOR, 'ul[aria-label="description-heading"].relative li')
-                    ))
-                    data["property_description"] = [
-                        li.text.strip() for li in desc_elements if li.text.strip()
+                seo_title = driver.find_element(By.CSS_SELECTOR, 'span[data-testid="seo-title-meta"]').text
+                seo_description = driver.find_element(By.CSS_SELECTOR, 'span[data-testid="seo-description-meta"]').text 
+
+                li_elements = WebDriverWait(driver, 10).until(
+                    EC.presence_of_all_elements_located(
+                        (By.CSS_SELECTOR, 'ul[aria-label="description-heading"] li')
+                    )
+                )
+                content = [li.get_attribute("textContent").strip() for li in li_elements]
+                
+                xpath_selector = '//span[@aria-label="main-street-name-heading"]/ancestor::div[contains(@class, "text-om-t16")]'
+                container = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH, xpath_selector))
+                )
+                raw_text = container.get_attribute("textContent")
+
+                parts = [
+                        seo_title,
+                        seo_description,
+                        " ".join(content),   
+                        raw_text
                     ]
+
+                paragraph = " ".join(
+                    part.strip() for part in parts if part and part.strip()
+                )
+                data["property_description"] = paragraph
             except Exception:
                 pass
             

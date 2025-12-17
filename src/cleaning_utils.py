@@ -339,10 +339,17 @@ class DataCleaner:
         construction_price = self.df.apply(self._estimate_construction_price, axis=1)
 
         with np.errstate(divide='ignore', invalid='ignore'):
-            # If `floors` is NaN, fill with 1.0, so `total_area` becomes equal to `area`.
-            # If `floors` is 0 (for "Đất nền"), `total_area` correctly becomes 0.
-            floors_for_calc = floors.fillna(1.0)
-            total_area = round((floors_for_calc * area).replace([np.inf, -np.inf], np.nan), 2)
+            floors_for_calc = floors.where(floors > 0, 1.0)
+            fallback_total_area = (floors_for_calc * area).replace([np.inf, -np.inf], np.nan)
+
+            extracted_area_series = self.df["property_description"].astype(str).str.extract(
+                r"diện\s+tích\s+xây\s+dựng\s+(\d+(?:\.\d+)?)\s*m²",
+                flags=re.IGNORECASE
+            )[0]
+            extracted_area_numeric = pd.to_numeric(extracted_area_series, errors='coerce')
+
+            total_area = round(extracted_area_numeric.fillna(fallback_total_area), 2)
+
             length = round((area / front_width).replace([np.inf, -np.inf], np.nan), 2)
 
         self.cleaned_df = pd.DataFrame({
