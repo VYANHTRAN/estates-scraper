@@ -255,7 +255,14 @@ class Scraper:
         return urls
 
     def scrape_menu_pages(self):
-        for page_num in tqdm(range(1, TOTAL_PAGES + 1), desc="Scraping menu pages"):
+        page_num = START_PAGE
+
+        if END_PAGE > 0:
+            page_range = range(START_PAGE, END_PAGE + 1) # set fixed range 
+        else:
+            page_range = iter(int, 1)  # infinite iterator to scrape until there is no listing 
+
+        for _ in tqdm(page_range, desc="Scraping menu pages"):
             if self.stop_requested.is_set():
                 self.log("Stop requested. Exiting URL scraping.", "INFO")
                 break
@@ -267,48 +274,78 @@ class Scraper:
             for retry in range(MAX_RETRIES):
                 if self.stop_requested.is_set():
                     break
+
                 try:
                     headers = {"User-Agent": self.driver_pool._get_random_user_agent()}
                     response = requests.get(url, headers=headers, timeout=10)
 
+                    # HTTP error handling 
                     if 400 <= response.status_code < 600:
                         consecutive_http_errors += 1
                         if consecutive_http_errors >= 3:
-                            self.log(f"Critical: {consecutive_http_errors} HTTP errors at {url}. Stopping.", "CRITICAL")
+                            self.log(
+                                f"Critical: {consecutive_http_errors} HTTP errors at {url}. Stopping.",
+                                "CRITICAL",
+                            )
                             self.stop_requested.set()
                             break
                         raise Exception(f"Status code {response.status_code}")
-                    elif not response.text:
+
+                    # Empty response
+                    if not response.text:
                         consecutive_empty_pages += 1
                         if consecutive_empty_pages >= 3:
-                            self.log(f"Critical: {consecutive_empty_pages} empty pages at {url}. Stopping.", "CRITICAL")
+                            self.log(
+                                f"Critical: {consecutive_empty_pages} empty pages at {url}. Stopping.",
+                                "CRITICAL",
+                            )
                             self.stop_requested.set()
                             break
                         raise Exception("Empty page content")
 
                     consecutive_http_errors = 0
                     consecutive_empty_pages = 0
+
                     links = self.get_listing_urls(response.text)
-                    self.log(f"Extracted {len(links)} links from page {page_num}", "DEBUG")
+                    self.log(
+                        f"Extracted {len(links)} links from page {page_num}",
+                        "DEBUG",
+                    )
+                    
+                    if END_PAGE <= 0 and not links:
+                        self.log(
+                            f"No listings found on page {page_num}. Reached end of pages.",
+                            "INFO",
+                        )
+                        return self.all_scraped_urls
+
                     self.all_scraped_urls.update(links)
                     break
+
                 except requests.exceptions.RequestException as e:
-                    self.log(f"Retry {retry + 1}/{MAX_RETRIES} for page {page_num}: {e}", "WARN")
-                    if self.stop_requested.is_set():
-                        break
+                    self.log(
+                        f"Retry {retry + 1}/{MAX_RETRIES} for page {page_num}: {e}",
+                        "WARN",
+                    )
                     time.sleep(RETRY_DELAY)
+
                 except Exception as e:
-                    self.log(f"Retry {retry + 1}/{MAX_RETRIES} for page {page_num}: {e}", "WARN")
-                    if self.stop_requested.is_set():
-                        break
+                    self.log(
+                        f"Retry {retry + 1}/{MAX_RETRIES} for page {page_num}: {e}",
+                        "WARN",
+                    )
                     time.sleep(RETRY_DELAY)
+
             else:
-                self.log(f"Failed to fetch page {page_num} after {MAX_RETRIES} retries.", "ERROR")
+                self.log(
+                    f"Failed to fetch page {page_num} after {MAX_RETRIES} retries.",
+                    "ERROR",
+                )
 
-            if self.stop_requested.is_set():
-                break
+            page_num += 1
+
         return self.all_scraped_urls
-
+            
     def save_urls(self, urls_to_save):
         if not urls_to_save:
             self.log("No URLs to save.", "INFO")
