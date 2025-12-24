@@ -1,0 +1,46 @@
+name: Property Scraper Pipeline
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Runs daily at midnight
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Install Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
+      - name: Step 1: Scrape URLs
+        run: python main.py scrape_urls
+        env:
+          LOG_LEVEL: INFO
+
+      - name: Step 2: Scrape Details
+        run: python main.py scrape_details
+        env:
+          LOG_LEVEL: INFO
+
+      - name: Upload Scraped Database
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraped-database
+          path: data/listings.db
+          retention-days: 5
