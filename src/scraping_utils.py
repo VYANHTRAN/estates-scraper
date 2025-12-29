@@ -48,6 +48,7 @@ class Scraper:
         options.add_argument("--disable-gpu")
         options.add_argument("--disable-background-networking")
         options.add_argument("--disable-software-rasterizer")
+        options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-webgl")
         options.add_argument("--disable-sync")
         options.add_argument("--disable-default-apps")

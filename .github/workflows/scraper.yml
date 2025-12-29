@@ -2,8 +2,8 @@ name: Daily Property Scrape
 
 on:
   schedule:
-    - cron: '0 0 * * *' # Runs at 00:00 UTC every day
-  workflow_dispatch:  # Allows you to run it manually from the "Actions" tab
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 jobs:
   scrape:
@@ -13,29 +13,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+      - name: Build Docker Image
+        run: docker build -t property-scraper .
 
-      - name: Install dependencies
+      - name: Run Scraper in Container
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run URL Scraper
-        run: python main.py scrape_urls
-        env:
-          LOG_LEVEL: INFO
-
-      - name: Run Details Scraper
-        run: python main.py scrape_details
-        env:
-          LOG_LEVEL: INFO
+          docker run --name scraper-container \
+            -v ${{ github.workspace }}/data:/app/data \
+            -e LOG_LEVEL=INFO \
+            property-scraper python main.py full_pipeline
 
       - name: Upload Scraped Database
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: scraped-database
-          path: data/listings.db
+          name: scraped-results
+          path: |
+            data/listings.db
+            data/listing_details_cleaned.xlsx
           retention-days: 7
