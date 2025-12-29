@@ -42,10 +42,15 @@ class Scraper:
         options = Options()
         options.add_argument(f"user-agent={self.ua.random}")
         options.add_argument("--headless")
+        options.add_argument("--disable-logging")
+        options.add_argument("--log-level=3")
         options.add_argument("--disable-gpu")
+        options.add_argument("--disable-background-networking")
+        options.add_argument("--disable-sync")
+        options.add_argument("--disable-default-apps")
+        options.add_argument("--disable-extensions")
         options.add_argument("--no-sandbox")
         options.add_argument("--window-size=1920,1080")
-        options.add_experimental_option('excludeSwitches', ['enable-logging'])
         
         try:
             self.driver = webdriver.Chrome(options=options)
@@ -73,9 +78,9 @@ class Scraper:
         page_num = START_PAGE
 
         if END_PAGE > 0:
-            page_range = range(START_PAGE, END_PAGE + 1) # set fixed range 
+            page_range = range(START_PAGE, END_PAGE + 1) 
         else:
-            page_range = iter(int, 1)  # infinite iterator to scrape until there is no listing 
+            page_range = iter(int, 1)  
 
         for _ in tqdm(page_range, desc="Scraping menu pages"):
             if self.stop_requested.is_set():
@@ -87,9 +92,6 @@ class Scraper:
             consecutive_empty_pages = 0
 
             for retry in range(MAX_RETRIES):
-                if self.stop_requested.is_set():
-                    break
-
                 try:
                     headers = {"User-Agent": self.ua.random} 
                     response = requests.get(url, headers=headers, timeout=10)
@@ -172,7 +174,8 @@ class Scraper:
 
     # -------------------- Details Scraping --------------------
     def extract_listing_details(self, url):
-        if self.stop_requested.is_set(): return None
+        if self.stop_requested.is_set(): 
+            return None
         
         try:
             self.driver.get(url)
@@ -182,7 +185,8 @@ class Scraper:
             def safe_text(by, selector):
                 try:
                     return wait.until(EC.presence_of_element_located((by, selector))).text.strip()
-                except: return None
+                except: 
+                    return None
 
             data = {
                 "listing_title": safe_text(By.XPATH, '//*[@id="detail_title"]'),

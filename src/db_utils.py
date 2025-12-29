@@ -1,5 +1,7 @@
 import sqlite3
 import threading
+import os
+
 from src.config import DB_PATH
 
 class DatabaseManager:
@@ -12,6 +14,8 @@ class DatabaseManager:
     def _init_db(self):
         """Initializes SQLite database and creates the table."""
         try:
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+
             self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             cursor = self.conn.cursor()
             cursor.execute("""
