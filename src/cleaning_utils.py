@@ -1,58 +1,34 @@
-import os
-import re
 import pandas as pd
 import numpy as np
-import sqlite3 
+import re 
 
 from src.config import *
-
+from src.db_utils import DatabaseManager
 
 class DataCleaner:
-    """
-    Cleans and transforms raw scraped property data into a structured format.
-    It loads the raw CSV and image map (optionally), processes the data using a series
-    of extraction functions, and saves the final result to an Excel file.
-    """
-
     def __init__(self):
-        self.db_path = DB_PATH 
+        self.db = DatabaseManager()
         self.output_path = CLEANED_DETAILS_OUTPUT_PATH
         self.df = None
-        self.cleaned_df = None
 
     def load_data(self):
-        """
-        Loads data from SQLite database.
-        It retrieves ONLY the latest version of each property.
-        It groups by 'property_id' and selects the row with the max 'id' (latest insertion).
-        """
-        if not os.path.exists(self.db_path):
-            raise FileNotFoundError(f"Database not found: {self.db_path}")
-
-        print(f"[INFO] Connecting to database: {self.db_path}")
+        """Loads data using the DatabaseManager's latest-version logic."""
+        print(f"[INFO] Loading latest records from DB...")
         try:
-            conn = sqlite3.connect(self.db_path)
-            
-            # Query to get only the most recent entry for each property_id
+            # Re-using the logic from DatabaseManager
             query = """
-            SELECT *
-            FROM listings
-            WHERE id IN (
-                SELECT MAX(id)
-                FROM listings
-                GROUP BY property_id
-            )
+                SELECT * FROM listings 
+                WHERE id IN (SELECT MAX(id) FROM listings GROUP BY property_id)
             """
-            self.df = pd.read_sql_query(query, conn)
-            
-            conn.close()
+            self.df = pd.read_sql_query(query, self.db.conn)
+            print(f"[INFO] Loaded {len(self.df)} records.")
         except Exception as e:
-            print(f"[ERROR] Failed to load data from DB: {e}")
+            print(f"[ERROR] Load failed: {e}")
             raise
-
-        print(f"[INFO] Loaded {len(self.df)} records (latest versions only) for cleaning.")
-
+        finally:
+            self.db.close()
         
+
     # -- Helper Methods --
     @staticmethod
     def _extract_city(row):
