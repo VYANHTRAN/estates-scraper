@@ -4,6 +4,7 @@ import time
 import sys
 import threading
 import requests
+import itertools
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from fake_useragent import UserAgent
@@ -46,6 +47,8 @@ class Scraper:
         options.add_argument("--log-level=3")
         options.add_argument("--disable-gpu")
         options.add_argument("--disable-background-networking")
+        options.add_argument("--disable-software-rasterizer")
+        options.add_argument("--disable-webgl")
         options.add_argument("--disable-sync")
         options.add_argument("--disable-default-apps")
         options.add_argument("--disable-extensions")
@@ -80,7 +83,7 @@ class Scraper:
         if END_PAGE > 0:
             page_range = range(START_PAGE, END_PAGE + 1) 
         else:
-            page_range = iter(int, 1)  
+            page_range = itertools.count(START_PAGE)
 
         for _ in tqdm(page_range, desc="Scraping menu pages"):
             if self.stop_requested.is_set():
