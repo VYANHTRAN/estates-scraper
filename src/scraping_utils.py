@@ -9,12 +9,7 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 from fake_useragent import UserAgent
 
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from src.config import *
 from src.db_utils import DatabaseManager
@@ -24,9 +19,12 @@ class Scraper:
     def __init__(self):
         self.ua = UserAgent()
         self.db = DatabaseManager()
-        self.driver = None
         self.stop_requested = threading.Event()
-        
+
+        self.browser = None
+        self.context = None
+        self.page = None
+
         self.all_scraped_urls = set()
         self.fieldnames = [
             "listing_title", "property_id", "total_price",
@@ -34,46 +32,64 @@ class Scraper:
             "city", "district", "alley_width",
             "features", "property_description"
         ]
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        self._init_driver()
 
-    def _init_driver(self):
-        """Initializes the single WebDriver instance."""
-        self.log("Initializing WebDriver...", "INFO")
-        options = Options()
-        options.add_argument(f"user-agent={self.ua.random}")
-        options.add_argument("--headless")
-        options.add_argument("--disable-logging")
-        options.add_argument("--log-level=3")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--disable-background-networking")
-        options.add_argument("--disable-software-rasterizer")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-webgl")
-        options.add_argument("--disable-sync")
-        options.add_argument("--disable-default-apps")
-        options.add_argument("--disable-extensions")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--window-size=1920,1080")
-        
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        self._init_browser()
+
+    # ------------------------------------------------------------------
+    # Browser setup
+    # ------------------------------------------------------------------
+    def _init_browser(self):
+        self.log("Initializing Playwright browser...", "INFO")
         try:
-            self.driver = webdriver.Chrome(options=options)
+            self.playwright = sync_playwright().start()
+            self.browser = self.playwright.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-gpu",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-extensions",
+                ],
+            )
+            self.context = self.browser.new_context(
+                user_agent=self.ua.random,
+                viewport={"width": 1920, "height": 1080},
+            )
+            self.page = self.context.new_page()
         except Exception as e:
-            self.log(f"Failed to initialize WebDriver: {e}", "CRITICAL")
+            self.log(f"Failed to initialize Playwright: {e}", "CRITICAL")
             sys.exit(1)
 
+    def shutdown(self):
+        self.log("Shutting down...", "INFO")
+        self.stop_requested.set()
+        if self.context:
+            self.context.close()
+        if self.browser:
+            self.browser.close()
+        if hasattr(self, "playwright"):
+            self.playwright.stop()
+        self.db.close()
+
+    # ------------------------------------------------------------------
+    # Logging
+    # ------------------------------------------------------------------
     def log(self, message, level="INFO"):
         levels = ["DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"]
         if levels.index(level.upper()) >= levels.index(LOG_LEVEL.upper()):
             print(f"[{level}] {message}")
 
-
-    # -------------------- Menu Scraping --------------------
+    # ------------------------------------------------------------------
+    # Menu scraping (unchanged – requests + BeautifulSoup)
+    # ------------------------------------------------------------------
     def get_listing_urls(self, html):
         soup = BeautifulSoup(html, "html.parser")
         cards = soup.select('a[data-role="property-card"]')
         urls = [
-            BASE_URL + card.get("href") if card.get("href") and not card.get("href").startswith("http") else card.get("href")
+            BASE_URL + card.get("href")
+            if card.get("href") and not card.get("href").startswith("http")
+            else card.get("href")
             for card in cards if card.get("href")
         ]
         return urls
@@ -82,13 +98,12 @@ class Scraper:
         page_num = START_PAGE
 
         if END_PAGE > 0:
-            page_range = range(START_PAGE, END_PAGE + 1) 
+            page_range = range(START_PAGE, END_PAGE + 1)
         else:
             page_range = itertools.count(START_PAGE)
 
         for _ in tqdm(page_range, desc="Scraping menu pages"):
             if self.stop_requested.is_set():
-                self.log("Stop requested. Exiting URL scraping.", "INFO")
                 break
 
             url = f"{START_URL}page={page_num}"
@@ -97,228 +112,187 @@ class Scraper:
 
             for retry in range(MAX_RETRIES):
                 try:
-                    headers = {"User-Agent": self.ua.random} 
+                    headers = {"User-Agent": self.ua.random}
                     response = requests.get(url, headers=headers, timeout=10)
 
-                    # HTTP error handling 
                     if 400 <= response.status_code < 600:
                         consecutive_http_errors += 1
                         if consecutive_http_errors >= 3:
-                            self.log(
-                                f"Critical: {consecutive_http_errors} HTTP errors at {url}. Stopping.",
-                                "CRITICAL",
-                            )
+                            self.log("Too many HTTP errors. Stopping.", "CRITICAL")
                             self.stop_requested.set()
                             break
-                        raise Exception(f"Status code {response.status_code}")
+                        raise Exception(f"Status {response.status_code}")
 
-                    # Empty response
                     if not response.text:
                         consecutive_empty_pages += 1
                         if consecutive_empty_pages >= 3:
-                            self.log(
-                                f"Critical: {consecutive_empty_pages} empty pages at {url}. Stopping.",
-                                "CRITICAL",
-                            )
+                            self.log("Too many empty pages. Stopping.", "CRITICAL")
                             self.stop_requested.set()
                             break
-                        raise Exception("Empty page content")
+                        raise Exception("Empty response")
 
                     consecutive_http_errors = 0
                     consecutive_empty_pages = 0
 
                     links = self.get_listing_urls(response.text)
-                    self.log(
-                        f"Extracted {len(links)} links from page {page_num}",
-                        "DEBUG",
-                    )
-                    
+                    self.all_scraped_urls.update(links)
+
                     if END_PAGE <= 0 and not links:
-                        self.log(
-                            f"No listings found on page {page_num}. Reached end of pages.",
-                            "INFO",
-                        )
                         return self.all_scraped_urls
 
-                    self.all_scraped_urls.update(links)
                     break
-
-                except requests.exceptions.RequestException as e:
-                    self.log(
-                        f"Retry {retry + 1}/{MAX_RETRIES} for page {page_num}: {e}",
-                        "WARN",
-                    )
-                    time.sleep(RETRY_DELAY)
 
                 except Exception as e:
                     self.log(
-                        f"Retry {retry + 1}/{MAX_RETRIES} for page {page_num}: {e}",
+                        f"Retry {retry + 1}/{MAX_RETRIES} page {page_num}: {e}",
                         "WARN",
                     )
                     time.sleep(RETRY_DELAY)
-
-            else:
-                self.log(
-                    f"Failed to fetch page {page_num} after {MAX_RETRIES} retries.",
-                    "ERROR",
-                )
 
             page_num += 1
 
         return self.all_scraped_urls
-            
+
     def save_urls(self, urls_to_save):
         if not urls_to_save:
-            self.log("No URLs to save.", "INFO")
             return
         with open(URLS_OUTPUT_PATH, "w", encoding="utf-8") as f:
             json.dump(list(urls_to_save), f, ensure_ascii=False, indent=2)
-        self.log(f"Saved {len(urls_to_save)} URLs to {URLS_OUTPUT_PATH}", "INFO")
+        self.log(f"Saved {len(urls_to_save)} URLs", "INFO")
 
-
-    # -------------------- Details Scraping --------------------
+    # ------------------------------------------------------------------
+    # Details scraping (Playwright)
+    # ------------------------------------------------------------------
     def extract_listing_details(self, url):
-        if self.stop_requested.is_set(): 
+        if self.stop_requested.is_set():
             return None
-        
-        try:
-            self.driver.get(url)
-            wait = WebDriverWait(self.driver, 10)
-            wait.until(EC.presence_of_element_located((By.XPATH, "/html/body")))
 
-            def safe_text(by, selector):
+        try:
+            self.page.goto(url, timeout=30000)
+            self.page.wait_for_selector("body", timeout=10000)
+
+            def safe_text(selector):
                 try:
-                    return wait.until(EC.presence_of_element_located((by, selector))).text.strip()
-                except: 
+                    el = self.page.wait_for_selector(selector, timeout=5000)
+                    return el.inner_text().strip()
+                except Exception:
                     return None
 
             data = {
-                "listing_title": safe_text(By.XPATH, '//*[@id="detail_title"]'),
-                "property_id": safe_text(By.CSS_SELECTOR, '#container-property div:nth-child(5) div.flex.cursor-pointer p'),
-                "total_price": safe_text(By.XPATH, '//*[@id="total-price"]'),
-                "unit_price": safe_text(By.XPATH, '//*[@id="unit-price"]'),
+                "listing_title": safe_text("#detail_title"),
+                "property_id": safe_text(
+                    "#container-property div:nth-child(5) div.flex.cursor-pointer p"
+                ),
+                "total_price": safe_text("#total-price"),
+                "unit_price": safe_text("#unit-price"),
                 "property_url": url,
-                "alley_width": safe_text(By.XPATH, '//*[@id="overview_content"]//div[@data-impression-index="1"]'),
+                "alley_width": safe_text(
+                    '#overview_content div[data-impression-index="1"]'
+                ),
                 "image_url": None,
                 "city": None,
                 "district": None,
                 "features": [],
-                "property_description": ""
+                "property_description": "",
             }
 
-            # Image URL
-            try:
-                img_el = self.driver.find_element(By.XPATH, '//link[@rel="preload" and @as="image"]')
-                image_src = img_el.get_attribute("imagesrcset")
-                if image_src:
-                    data["image_url"] = image_src.split(',')[0].strip().split(' ')[0]
-            except Exception:
-                pass
+            # Image
+            img = self.page.query_selector(
+                'link[rel="preload"][as="image"]'
+            )
+            if img:
+                srcset = img.get_attribute("imagesrcset")
+                if srcset:
+                    data["image_url"] = srcset.split(",")[0].split(" ")[0]
 
-            # Breadcrumbs
-            try:
-                script_elements = self.driver.find_elements(By.XPATH, '//script[@type="application/ld+json"]')
-                for script_el in script_elements:
-                    try:
-                        json_data = json.loads(script_el.get_attribute("innerHTML"))
-                        if isinstance(json_data, dict) and json_data.get("@type") == "BreadcrumbList":
-                            for item in json_data.get("itemListElement", []):
-                                if item.get("position") == 2:
-                                    data["city"] = item.get("name")
-                                elif item.get("position") == 3:
-                                    data["district"] = item.get("name")
-                            break
-                    except Exception:
-                        continue
-            except Exception:
-                pass
+            # Breadcrumbs (JSON-LD)
+            scripts = self.page.query_selector_all(
+                'script[type="application/ld+json"]'
+            )
+            for s in scripts:
+                try:
+                    jd = json.loads(s.inner_text())
+                    if isinstance(jd, dict) and jd.get("@type") == "BreadcrumbList":
+                        for item in jd.get("itemListElement", []):
+                            if item.get("position") == 2:
+                                data["city"] = item.get("name")
+                            elif item.get("position") == 3:
+                                data["district"] = item.get("name")
+                        break
+                except Exception:
+                    continue
 
             # Features
-            try:
-                features = wait.until(EC.presence_of_all_elements_located((By.XPATH, '//*[@id="key-feature-item"]')))
-                for ele in features:
-                    try:
-                        title_el = ele.find_element(By.XPATH, './/*[@id="item_title"]')
-                        text_el = ele.find_element(By.XPATH, './/*[@id="key-feature-text"]')
-                        title = title_el.text.strip() if title_el else None
-                        text = text_el.text.strip() if text_el else None
-                        if title and text:
-                            data["features"].append(f"{title}: {text}")
-                    except NoSuchElementException:
-                        continue
-            except Exception:
-                pass
+            feature_items = self.page.query_selector_all("#key-feature-item")
+            for ele in feature_items:
+                try:
+                    title = ele.query_selector("#item_title").inner_text().strip()
+                    text = ele.query_selector("#key-feature-text").inner_text().strip()
+                    if title and text:
+                        data["features"].append(f"{title}: {text}")
+                except Exception:
+                    continue
 
             # Description
             try:
-                seo_title = self.driver.find_element(By.CSS_SELECTOR, 'span[data-testid="seo-title-meta"]').text
-                seo_description = self.driver.find_element(By.CSS_SELECTOR, 'span[data-testid="seo-description-meta"]').text 
+                seo_title = self.page.inner_text(
+                    'span[data-testid="seo-title-meta"]'
+                )
+                seo_description = self.page.inner_text(
+                    'span[data-testid="seo-description-meta"]'
+                )
 
-                li_elements = WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_all_elements_located(
-                        (By.CSS_SELECTOR, 'ul[aria-label="description-heading"] li')
-                    )
+                li_elements = self.page.query_selector_all(
+                    'ul[aria-label="description-heading"] li'
                 )
-                content = [li.get_attribute("textContent").strip() for li in li_elements]
-                
-                xpath_selector = '//span[@aria-label="main-street-name-heading"]/ancestor::div[contains(@class, "text-om-t16")]'
-                container = WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.XPATH, xpath_selector))
+                content = [li.inner_text().strip() for li in li_elements]
+
+                container = self.page.wait_for_selector(
+                    '//span[@aria-label="main-street-name-heading"]/ancestor::div[contains(@class,"text-om-t16")]',
+                    timeout=5000,
                 )
-                raw_text = container.get_attribute("textContent")
+                raw_text = container.text_content()
 
                 parts = [
-                        seo_title,
-                        seo_description,
-                        " ".join(content),   
-                        raw_text
-                    ]
-
-                paragraph = " ".join(
-                    part.strip() for part in parts if part and part.strip()
+                    seo_title,
+                    seo_description,
+                    " ".join(content),
+                    raw_text,
+                ]
+                data["property_description"] = " ".join(
+                    p.strip() for p in parts if p and p.strip()
                 )
-                data["property_description"] = paragraph
             except Exception:
                 pass
-            
-            self.log(f"Successfully extracted details for {url}", "DEBUG")
+
+            self.log(f"Extracted details for {url}", "DEBUG")
             return data
-        except (TimeoutException, NoSuchElementException) as e:
-            self.log(f"Selenium timeout or element not found for {url}: {e}", "WARN")
+
+        except PlaywrightTimeoutError as e:
+            self.log(f"Timeout for {url}: {e}", "WARN")
             return None
 
     def scrape_with_retries(self, url):
-        for attempt in range(1, MAX_RETRIES + 1):
-            if self.stop_requested.is_set(): 
+        for _ in range(MAX_RETRIES):
+            if self.stop_requested.is_set():
                 break
             result = self.extract_listing_details(url)
-            if result: 
+            if result:
                 return result
             time.sleep(RETRY_DELAY)
         return None
 
     def process_listings_from_json(self, json_path):
         if not os.path.exists(json_path):
-            print(f"JSON file not found: {json_path}")
+            self.log(f"JSON not found: {json_path}", "ERROR")
             return
-        
+
         with open(json_path, "r", encoding="utf-8") as f:
-            try:
-                urls = json.load(f)
-            except json.JSONDecodeError as e:
-                self.log(f"Invalid JSON format: {e}", "ERROR")
-                return
+            urls = json.load(f)
 
         for url in tqdm(urls, desc="Scraping details"):
-            if self.stop_requested.is_set(): 
+            if self.stop_requested.is_set():
                 break
             result = self.scrape_with_retries(url)
             if result:
                 self.db.save_listing(result, self.fieldnames)
-
-    def shutdown(self):
-        self.log("Shutting down...", "INFO")
-        self.stop_requested.set()
-        if self.driver:
-            self.driver.quit()
-        self.db.close()

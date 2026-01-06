@@ -350,7 +350,7 @@ class DataCleaner:
             "Diện tích đất (m2)": area,
             "Tổng diện tích sàn": total_area,
             "Kích thước mặt tiền (m)": front_width,
-            "Kích thước chiều dài": length,
+            "Kích thước chiều dài (m)": length,
             "Số mặt tiền tiếp giáp": num_frontages,
             "Hình dạng": "Chữ nhật",
             "Độ rộng ngõ/ngách nhỏ nhất (m)": self.df.apply(self._extract_alley_width, axis=1),

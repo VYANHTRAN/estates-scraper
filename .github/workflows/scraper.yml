@@ -19,6 +19,7 @@ jobs:
       - name: Run Scraper in Container
         run: |
           docker run --name scraper-container \
+            --shm-size=2g \
             -v ${{ github.workspace }}/data:/app/data \
             -e LOG_LEVEL=INFO \
             property-scraper python main.py full_pipeline
