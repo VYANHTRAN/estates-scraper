@@ -331,7 +331,7 @@ class DataCleaner:
         self.cleaned_df = pd.DataFrame({
             "Tiêu đề bài đăng": self.df["listing_title"],
             "Tỉnh/Thành phố": city,
-            "Quận/Huyện/Thị xã": district,
+            "Thành phố/Quận/Huyện/Thị xã": district,
             "Xã/Phường/Thị trấn": location,
             "Đường phố": street,
             "Địa chỉ chi tiết": prop_type,

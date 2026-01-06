@@ -1,35 +1,57 @@
-name: Daily Property Scrape
+name: Daily Real Estate Scraper
 
 on:
+  # Run daily at 00:00 UTC (07:00 AM Vietnam Time)
   schedule:
     - cron: '0 0 * * *'
+  # Allow manual trigger via GitHub Actions tab
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  scrape:
+  scrape-and-clean:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 60  # Stop if scraping gets stuck
+
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build Docker Image
-        run: docker build -t property-scraper .
-
-      - name: Run Scraper in Container
-        run: |
-          docker run --name scraper-container \
-            --shm-size=2g \
-            -v ${{ github.workspace }}/data:/app/data \
-            -e LOG_LEVEL=INFO \
-            property-scraper python main.py full_pipeline
-
-      - name: Upload Scraped Database
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          name: scraped-results
-          path: |
-            data/listings.db
-            data/listing_details_cleaned.xlsx
-          retention-days: 7
+          python-version: '3.10'
+          cache: 'pip' # Caches dependencies to speed up future runs
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          # Ensure playwright library is installed if missing from requirements
+          pip install playwright 
+          
+      - name: Install Playwright Browsers
+        run: |
+          playwright install chromium
+          playwright install-deps
+
+      - name: Run Full Pipeline
+        run: |
+          python main.py full_pipeline
+
+      - name: Commit and Push Results
+        # This step saves the 'data/' folder back to your repository
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add the data directory (ensure .gitignore doesn't exclude it)
+          git add data/
+          
+          # Commit if there are changes
+          git commit -m "Automated data update: $(date +'%Y-%m-%d')" || echo "No changes to commit"
+          
+          # Push changes
+          git push
