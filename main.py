@@ -1,104 +1,68 @@
 import argparse
 import sys
+import asyncio
 
 from src.scraping_utils import Scraper
 from src.cleaning_utils import DataCleaner
 from src.config import *
 
 
-def run_scrape_urls():
+async def run_scrape_urls():
     scraper = Scraper()
+    await scraper.init_browser()
+
     print("[INFO] Scraping listing URLs...")
     try:
         urls = scraper.scrape_menu_pages()
         scraper.save_urls(urls)
-    except KeyboardInterrupt:
-        print("\n[INFO] KeyboardInterrupt detected during URL scraping. Saving collected URLs and shutting down.")
-        scraper.stop_requested.set() 
-        scraper.save_urls(scraper.all_scraped_urls)
-        sys.exit(0) 
-    except Exception as e:
-        print(f"[ERROR] An unexpected error occurred during URL scraping: {e}")
-        scraper.save_urls(scraper.all_scraped_urls)
-        sys.exit(1)
     finally:
-        scraper.shutdown()
+        await scraper.shutdown()
 
 
-def run_scrape_details():
+async def run_scrape_details():
     scraper = Scraper()
+    await scraper.init_browser()
+
     print("[INFO] Scraping listing details from saved URLs...")
     try:
-        scraper.process_listings_from_json(URLS_OUTPUT_PATH)
-    except KeyboardInterrupt:
-        print("\n[INFO] KeyboardInterrupt detected during details scraping. Any unsaved details have been flushed to CSV.")
-        scraper.stop_requested.set() 
-        scraper.shutdown()
-        sys.exit(0) 
-    except Exception as e:
-        print(f"[ERROR] An unexpected error occurred during details scraping: {e}")
-        sys.exit(1)
+        await scraper.process_listings_from_json(URLS_OUTPUT_PATH)
     finally:
-        scraper.shutdown()
+        await scraper.shutdown()
 
 
 def run_clean_data():
-    """Initializes and runs the data cleaning process."""
     print("[INFO] Cleaning scraped data...")
-    try:
-        cleaner = DataCleaner()
-        cleaner.load_data()
-        cleaner.clean_data()
-        cleaner.save_cleaned_data()
-        print("[INFO] Data cleaning completed successfully.")
-    except KeyboardInterrupt:
-        print("\n[INFO] Data cleaning interrupted.")
-        sys.exit(0)
-    except Exception as e:
-        print(f"[ERROR] Data cleaning failed: {e}")
-        sys.exit(1)
+    cleaner = DataCleaner()
+    cleaner.load_data()
+    cleaner.clean_data()
+    cleaner.save_cleaned_data()
+    print("[INFO] Data cleaning completed successfully.")
 
 
-def run_full_pipeline():
-    """Runs the entire pipeline from scraping to cleaning."""
+async def run_full_pipeline():
     print("[INFO] Running full scraping and cleaning pipeline...")
-    scraper = Scraper() 
-    try:
-        run_scrape_urls()
-        run_scrape_details()
-        run_clean_data()
-        print("[INFO] Full pipeline completed.")
-    except KeyboardInterrupt:
-        print("\n[INFO] Full pipeline interrupted. Shutting down gracefully.")
-        sys.exit(0)
-    except Exception as e:
-        print(f"[ERROR] An unexpected error occurred during the full pipeline: {e}")
-        sys.exit(1)
+    await run_scrape_urls()
+    await run_scrape_details()
+    run_clean_data()
+    print("[INFO] Full pipeline completed.")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Run scraping and cleaning tasks.")
     parser.add_argument(
         "task",
-        choices=[
-            "scrape_urls",
-            "scrape_details",
-            "clean_data",
-            "full_pipeline",
-        ],
-        help="The task to run.",
+        choices=["scrape_urls", "scrape_details", "clean_data", "full_pipeline"],
     )
-
     args = parser.parse_args()
 
     if args.task == "scrape_urls":
-        run_scrape_urls()
+        asyncio.run(run_scrape_urls())
     elif args.task == "scrape_details":
-        run_scrape_details()
+        asyncio.run(run_scrape_details())
     elif args.task == "clean_data":
         run_clean_data()
     elif args.task == "full_pipeline":
-        run_full_pipeline()
+        asyncio.run(run_full_pipeline())
 
 
 if __name__ == "__main__":

@@ -1,19 +1,19 @@
 import os
 import json
 import time
-import sys
 import threading
-import requests
 import itertools
+import asyncio
+import requests
+
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from fake_useragent import UserAgent
 
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 from src.config import *
 from src.db_utils import DatabaseManager
-
 
 class Scraper:
     def __init__(self):
@@ -21,6 +21,7 @@ class Scraper:
         self.db = DatabaseManager()
         self.stop_requested = threading.Event()
 
+        self.playwright = None
         self.browser = None
         self.context = None
         self.page = None
@@ -34,16 +35,15 @@ class Scraper:
         ]
 
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        self._init_browser()
 
     # ------------------------------------------------------------------
     # Browser setup
     # ------------------------------------------------------------------
-    def _init_browser(self):
+    async def init_browser(self):
         self.log("Initializing Playwright browser...", "INFO")
         try:
-            self.playwright = sync_playwright().start()
-            self.browser = self.playwright.chromium.launch(
+            self.playwright = await async_playwright().start()
+            self.browser = await self.playwright.chromium.launch(
                 headless=True,
                 args=[
                     "--disable-gpu",
@@ -52,24 +52,26 @@ class Scraper:
                     "--disable-extensions",
                 ],
             )
-            self.context = self.browser.new_context(
+            self.context = await self.browser.new_context(
                 user_agent=self.ua.random,
                 viewport={"width": 1920, "height": 1080},
             )
-            self.page = self.context.new_page()
+            self.page = await self.context.new_page()
         except Exception as e:
             self.log(f"Failed to initialize Playwright: {e}", "CRITICAL")
-            sys.exit(1)
+            raise
 
-    def shutdown(self):
+    async def shutdown(self):
         self.log("Shutting down...", "INFO")
         self.stop_requested.set()
+
         if self.context:
-            self.context.close()
+            await self.context.close()
         if self.browser:
-            self.browser.close()
-        if hasattr(self, "playwright"):
-            self.playwright.stop()
+            await self.browser.close()
+        if self.playwright:
+            await self.playwright.stop()
+
         self.db.close()
 
     # ------------------------------------------------------------------
@@ -163,30 +165,30 @@ class Scraper:
     # ------------------------------------------------------------------
     # Details scraping 
     # ------------------------------------------------------------------
-    def extract_listing_details(self, url):
+    async def extract_listing_details(self, url):
         if self.stop_requested.is_set():
             return None
 
         try:
-            self.page.goto(url, timeout=30000)
-            self.page.wait_for_selector("body", timeout=10000)
+            await self.page.goto(url, timeout=30000)
+            await self.page.wait_for_selector("body", timeout=10000)
 
-            def safe_text(selector):
+            async def safe_text(selector):
                 try:
-                    el = self.page.wait_for_selector(selector, timeout=5000)
-                    return el.inner_text().strip()
+                    el = await self.page.wait_for_selector(selector, timeout=5000)
+                    return (await el.inner_text()).strip()
                 except Exception:
                     return None
 
             data = {
-                "listing_title": safe_text("#detail_title"),
-                "property_id": safe_text(
+                "listing_title": await safe_text("#detail_title"),
+                "property_id": await safe_text(
                     "#container-property div:nth-child(5) div.flex.cursor-pointer p"
                 ),
-                "total_price": safe_text("#total-price"),
-                "unit_price": safe_text("#unit-price"),
+                "total_price": await safe_text("#total-price"),
+                "unit_price": await safe_text("#unit-price"),
                 "property_url": url,
-                "alley_width": safe_text(
+                "alley_width": await safe_text(
                     '#overview_content div[data-impression-index="1"]'
                 ),
                 "image_url": None,
@@ -196,22 +198,20 @@ class Scraper:
                 "property_description": "",
             }
 
-            # Image
-            img = self.page.query_selector(
+            img = await self.page.query_selector(
                 'link[rel="preload"][as="image"]'
             )
             if img:
-                srcset = img.get_attribute("imagesrcset")
+                srcset = await img.get_attribute("imagesrcset")
                 if srcset:
                     data["image_url"] = srcset.split(",")[0].split(" ")[0]
 
-            # Breadcrumbs (JSON-LD)
-            scripts = self.page.query_selector_all(
+            scripts = await self.page.query_selector_all(
                 'script[type="application/ld+json"]'
             )
             for s in scripts:
                 try:
-                    jd = json.loads(s.inner_text())
+                    jd = json.loads(await s.inner_text())
                     if isinstance(jd, dict) and jd.get("@type") == "BreadcrumbList":
                         for item in jd.get("itemListElement", []):
                             if item.get("position") == 2:
@@ -222,36 +222,41 @@ class Scraper:
                 except Exception:
                     continue
 
-            # Features
-            feature_items = self.page.query_selector_all("#key-feature-item")
+            feature_items = await self.page.query_selector_all("#key-feature-item")
             for ele in feature_items:
                 try:
-                    title = ele.query_selector("#item_title").inner_text().strip()
-                    text = ele.query_selector("#key-feature-text").inner_text().strip()
+                    title = await ele.query_selector("#item_title")
+                    text = await ele.query_selector("#key-feature-text")
                     if title and text:
-                        data["features"].append(f"{title}: {text}")
+                        data["features"].append(
+                            f"{(await title.inner_text()).strip()}: {(await text.inner_text()).strip()}"
+                        )
                 except Exception:
                     continue
 
-            # Description
             try:
-                seo_title = self.page.inner_text(
+                seo_title = await self.page.inner_text(
                     'span[data-testid="seo-title-meta"]'
                 )
-                seo_description = self.page.inner_text(
+                seo_description = await self.page.inner_text(
                     'span[data-testid="seo-description-meta"]'
                 )
 
-                li_elements = self.page.query_selector_all(
+                li_elements = await self.page.query_selector_all(
                     'ul[aria-label="description-heading"] li'
                 )
-                content = [li.inner_text().strip() for li in li_elements]
+                content = []
+                for li in li_elements:
+                    try:
+                        content.append((await li.inner_text()).strip())
+                    except Exception:
+                        continue
 
-                container = self.page.wait_for_selector(
+                container = await self.page.wait_for_selector(
                     '//span[@aria-label="main-street-name-heading"]/ancestor::div[contains(@class,"text-om-t16")]',
                     timeout=5000,
                 )
-                raw_text = container.text_content()
+                raw_text = await container.text_content()
 
                 parts = [
                     seo_title,
@@ -259,30 +264,32 @@ class Scraper:
                     " ".join(content),
                     raw_text,
                 ]
+
                 data["property_description"] = " ".join(
                     p.strip() for p in parts if p and p.strip()
                 )
+
             except Exception:
                 pass
 
             self.log(f"Extracted details for {url}", "DEBUG")
             return data
 
-        except PlaywrightTimeoutError as e:
-            self.log(f"Timeout for {url}: {e}", "WARN")
+        except PlaywrightTimeoutError:
+            self.log(f"Timeout for {url}", "WARN")
             return None
 
-    def scrape_with_retries(self, url):
+    async def scrape_with_retries(self, url):
         for _ in range(MAX_RETRIES):
             if self.stop_requested.is_set():
                 break
-            result = self.extract_listing_details(url)
+            result = await self.extract_listing_details(url)
             if result:
                 return result
-            time.sleep(RETRY_DELAY)
+            await asyncio.sleep(RETRY_DELAY)
         return None
 
-    def process_listings_from_json(self, json_path):
+    async def process_listings_from_json(self, json_path):
         if not os.path.exists(json_path):
             self.log(f"JSON not found: {json_path}", "ERROR")
             return
@@ -293,6 +300,6 @@ class Scraper:
         for url in tqdm(urls, desc="Scraping details"):
             if self.stop_requested.is_set():
                 break
-            result = self.scrape_with_retries(url)
+            result = await self.scrape_with_retries(url)
             if result:
                 self.db.save_listing(result, self.fieldnames)
