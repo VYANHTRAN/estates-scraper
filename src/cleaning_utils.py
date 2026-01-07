@@ -361,11 +361,11 @@ class DataCleaner:
             "Thông tin chi tiết": self.df["property_description"]
         })
 
-        subset = ["Tỉnh/Thành phố", "Quận/Huyện/Thị xã", "Xã/Phường/Thị trấn",
+        subset = ["Tỉnh/Thành phố", "Thành phố/Quận/Huyện/Thị xã", "Xã/Phường/Thị trấn",
                   "Đường phố", "Địa chỉ chi tiết", "Nguồn thông tin",
                   "Giá rao bán/giao dịch", "Giá ước tính", "Số tầng công trình",
                   "Đơn giá xây dựng", "Diện tích đất (m2)", "Tổng diện tích sàn",
-                  "Kích thước mặt tiền (m)", "Kích thước chiều dài", "Số mặt tiền tiếp giáp",
+                  "Kích thước mặt tiền (m)", "Kích thước chiều dài (m)", "Số mặt tiền tiếp giáp",
                   "Độ rộng ngõ/ngách nhỏ nhất (m)", "Khoảng cách tới trục đường chính (m)", 
         ]
 

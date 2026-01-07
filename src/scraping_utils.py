@@ -81,7 +81,7 @@ class Scraper:
             print(f"[{level}] {message}")
 
     # ------------------------------------------------------------------
-    # Menu scraping (unchanged – requests + BeautifulSoup)
+    # Menu scraping 
     # ------------------------------------------------------------------
     def get_listing_urls(self, html):
         soup = BeautifulSoup(html, "html.parser")
@@ -161,7 +161,7 @@ class Scraper:
         self.log(f"Saved {len(urls_to_save)} URLs", "INFO")
 
     # ------------------------------------------------------------------
-    # Details scraping (Playwright)
+    # Details scraping 
     # ------------------------------------------------------------------
     def extract_listing_details(self, url):
         if self.stop_requested.is_set():
